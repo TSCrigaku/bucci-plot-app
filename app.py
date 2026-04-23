@@ -7,6 +7,7 @@ from scipy.stats import linregress
 from scipy.signal import savgol_filter
 import io
 import zipfile
+import os
 
 # ページ設定
 st.set_page_config(page_title="Bucci Plot (TSC)解析システム", layout="wide")
@@ -26,6 +27,9 @@ st.sidebar.header("3. 解析範囲の設定 [℃]")
 uploaded_file = st.file_uploader("測定データ (CSV: 時間[min], 温度[℃], 電流[A]) を選択", type=["csv"])
 
 if uploaded_file is not None:
+    # 元のファイル名から拡張子を除いた部分を取得
+    raw_filename = os.path.splitext(uploaded_file.name)[0]
+
     try:
         # データ読み込み
         try:
@@ -71,11 +75,9 @@ if uploaded_file is not None:
         t_sec_peak = t_sec[mask_peak]
         I_clean_peak = I_clean[mask_peak]
         
-        # 昇温速度 (beta) の算出：ピーク範囲内のデータのみを使用
         slope_beta, _, r_v, _, _ = linregress(t_sec_peak, T_K_peak)
         beta = slope_beta
         
-        # Bucci計算（積分）
         I_clean_safe = np.where(I_clean_peak <= 0, 1e-25, I_clean_peak)
         T_rev = T_K_peak[::-1]
         I_rev = I_clean_safe[::-1]
@@ -113,12 +115,9 @@ if uploaded_file is not None:
             ax1.plot(T_degC, I_raw, 'k:', alpha=0.3, label='Raw Data')
             ax1.plot(T_degC, I_baseline, 'r--', label='Baseline')
             ax1.plot(T_degC, I_clean, 'b-', label='Cleaned')
-            
-            # 各範囲の可視化
             ax1.axvspan(base_low[0], base_low[1], color='red', alpha=0.1, label='Base Fit')
             ax1.axvspan(base_high[0], base_high[1], color='red', alpha=0.1)
             ax1.axvspan(peak_range[0], peak_range[1], color='green', alpha=0.08, label='Peak Range')
-            
             ax1.set_xlabel("Temperature [°C]"); ax1.set_ylabel("Current [A]")
             ax1.legend(); ax1.grid(True)
             st.pyplot(fig1)
@@ -134,76 +133,47 @@ if uploaded_file is not None:
             st.pyplot(fig2)
 
         # --- 保存データの作成 ---
-        # 1. サマリーCSV (解析結果と指定した全範囲を記録)
         summary_df = pd.DataFrame({
-            "Parameter": [
-                "Activation Energy (Ea)", 
-                "Pre-exponential factor (tau0)", 
-                "Heating Rate (beta)", 
-                "Heating Linearity (R2)",
-                "Baseline Fit Range (Low)",
-                "Baseline Fit Range (High)",
-                "Single Peak Extraction Range",
-                "Bucci Fit Range"
-            ],
-            "Value": [
-                f"{Ea:.4f}", 
-                f"{tau0:.4e}", 
-                f"{beta*60:.4f}", 
-                f"{r_v**2:.5f}",
-                f"{base_low[0]:.1f} - {base_low[1]:.1f}",
-                f"{base_high[0]:.1f} - {base_high[1]:.1f}",
-                f"{peak_range[0]:.1f} - {peak_range[1]:.1f}",
-                f"{bucci_range[0]:.1f} - {bucci_range[1]:.1f}"
-            ],
+            "Parameter": ["Activation Energy (Ea)", "Pre-exponential factor (tau0)", "Heating Rate (beta)", "Heating Linearity (R2)", "Baseline Low", "Baseline High", "Peak Range", "Bucci Range"],
+            "Value": [f"{Ea:.4f}", f"{tau0:.4e}", f"{beta*60:.4f}", f"{r_v**2:.5f}", f"{base_low}", f"{base_high}", f"{peak_range}", f"{bucci_range}"],
             "Unit": ["eV", "s", "K/min", "-", "degC", "degC", "degC", "degC"]
         })
-        
-        # 2. 各画像バッファ
         buf1 = io.BytesIO(); fig1.savefig(buf1, format="png", dpi=300, bbox_inches='tight')
         buf2 = io.BytesIO(); fig2.savefig(buf2, format="png", dpi=300, bbox_inches='tight')
-        
-        # 3. TSCデータCSV
         tsc_df = pd.DataFrame({"Temp_degC": T_degC, "I_raw": I_raw, "I_baseline": I_baseline, "I_clean": I_clean})
-        
-        # 4. BucciプロットデータCSV
         bucci_df = pd.DataFrame({"1000/T": x_bucci_peak, "ln_tau": y_bucci_peak})
 
         # --- ダウンロードボタンの表示 ---
         st.divider()
         st.subheader("データの保存")
         
-        # 個別ダウンロード（画像）
         col_img1, col_img2 = st.columns(2)
         with col_img1:
-            st.download_button("🖼️ TSCグラフを保存 (PNG)", buf1.getvalue(), "tsc_plot.png", "image/png")
+            st.download_button(f"🖼️ TSCグラフ保存", buf1.getvalue(), f"{raw_filename}_tsc_plot.png", "image/png")
         with col_img2:
-            st.download_button("🖼️ Bucciグラフを保存 (PNG)", buf2.getvalue(), "bucci_plot.png", "image/png")
+            st.download_button(f"🖼️ Bucciグラフ保存", buf2.getvalue(), f"{raw_filename}_bucci_plot.png", "image/png")
 
-        # 個別ダウンロード（CSV）
         col_csv1, col_csv2, col_csv3 = st.columns(3)
         with col_csv1:
-            st.download_button("📄 TSCデータ (CSV)", tsc_df.to_csv(index=False).encode('utf-8'), "processed_tsc.csv", "text/csv")
+            st.download_button("📄 TSCデータ (CSV)", tsc_df.to_csv(index=False).encode('utf-8'), f"{raw_filename}_processed_tsc.csv", "text/csv")
         with col_csv2:
-            st.download_button("📄 Bucciプロットデータ (CSV)", bucci_df.to_csv(index=False).encode('utf-8'), "bucci_data.csv", "text/csv")
+            st.download_button("📄 Bucciプロットデータ (CSV)", bucci_df.to_csv(index=False).encode('utf-8'), f"{raw_filename}_bucci_data.csv", "text/csv")
         with col_csv3:
-            st.download_button("📊 解析サマリー (CSV)", summary_df.to_csv(index=False).encode('utf-8'), "summary_results.csv", "text/csv")
+            st.download_button("📊 解析サマリー (CSV)", summary_df.to_csv(index=False).encode('utf-8'), f"{raw_filename}_summary_results.csv", "text/csv")
 
-        st.write("") # 少し余白を空ける
-        
         # 一括ダウンロード（Zip）
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-            zip_file.writestr("summary_results.csv", summary_df.to_csv(index=False))
-            zip_file.writestr("processed_tsc.csv", tsc_df.to_csv(index=False))
-            zip_file.writestr("bucci_data.csv", bucci_df.to_csv(index=False))
-            zip_file.writestr("tsc_plot.png", buf1.getvalue())
-            zip_file.writestr("bucci_plot.png", buf2.getvalue())
+            zip_file.writestr(f"{raw_filename}_summary_results.csv", summary_df.to_csv(index=False))
+            zip_file.writestr(f"{raw_filename}_processed_tsc.csv", tsc_df.to_csv(index=False))
+            zip_file.writestr(f"{raw_filename}_bucci_data.csv", bucci_df.to_csv(index=False))
+            zip_file.writestr(f"{raw_filename}_tsc_plot.png", buf1.getvalue())
+            zip_file.writestr(f"{raw_filename}_bucci_plot.png", buf2.getvalue())
         
         st.download_button(
             label="📁 全ての解析結果を一括保存 (ZIP)",
             data=zip_buffer.getvalue(),
-            file_name="bucci_analysis_results.zip",
+            file_name=f"{raw_filename}_bucci_analysis_results.zip",
             mime="application/zip",
             use_container_width=True
         )
